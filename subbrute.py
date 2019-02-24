@@ -143,7 +143,7 @@ class resolver:
 
 class verify_nameservers(multiprocessing.Process):
 
-    def __init__(self, target, query_type, resolver_q, resolver_list, authoritative = False):
+    def __init__(self, target, query_type, resolver_q, resolver_list, authoritative = False, verify = True):
         multiprocessing.Process.__init__(self, target = self.run)
         self.daemon = True
         signal_init()
@@ -159,6 +159,7 @@ class verify_nameservers(multiprocessing.Process):
         #Resolvers that will work in a pinch:
         self.backup_resolver = ['8.8.8.8', '8.8.4.4', '127.0.0.1']
         self.prev_wildcards = {}
+        self.verify_nameserver = verify
 
     #This process cannot block forever,  it  needs to check if its time to die.
     def add_nameserver(self, nameserver):
@@ -176,7 +177,9 @@ class verify_nameservers(multiprocessing.Process):
         added_resolver = False
         for server in nameserver_list:
             server = server.strip()
-            if server:
+            if server and not self.verify_nameserver:
+                self.add_nameserver(server)
+            elif server:
                 try:
                     #Only add the nameserver to the queue if we can detect wildcards.
                     verified_server = self.find_wildcards(self.target, server)
@@ -506,11 +509,11 @@ def extract_directory(dir_name, hostname = ""):
                     ret.append(h)
     return ret
 
-def print_target(target, query_type = "ANY", subdomains = "names.txt", resolve_list = "resolvers.txt", process_count = 16, print_data = False, output = False, json_output = False):
+def print_target(target, query_type = "ANY", subdomains = "names.txt", resolve_list = "resolvers.txt", process_count = 16, print_data = False, output = False, json_output = False, verify_nameserver = True):
     json_struct = {}
     if not print_data:
         dupe_filter = {}
-    for result in run(target, query_type, subdomains, resolve_list, process_count):
+    for result in run(target, query_type, subdomains, resolve_list, process_count, verify_nameserver):
         (hostname, record_type, record) = result
         if not print_data:
             #We just care about new names, filter multiple records for the same name.
@@ -544,7 +547,7 @@ def print_target(target, query_type = "ANY", subdomains = "names.txt", resolve_l
         json_output = open(options.json, "w")
         json_output.write(json.dumps(json_struct))
 
-def run(target, query_type = "ANY", subdomains = "names.txt", resolve_list = False, process_count = 8):
+def run(target, query_type = "ANY", subdomains = "names.txt", resolve_list = False, process_count = 8, verify_nameserver = True):
     spider_blacklist = {}
     result_blacklist = {}
     found_domains = {}
@@ -592,8 +595,10 @@ def run(target, query_type = "ANY", subdomains = "names.txt", resolve_list = Fal
                     yield r
             #Even if the AXFR was a success, keep looking. Don't trust anyone.
     #Make a source of fast nameservers available for other processes.
-    verify_nameservers_proc = verify_nameservers(target, query_type, resolve_q, resolve_list, is_authoritative)
+
+    verify_nameservers_proc = verify_nameservers(target, query_type, resolve_q, resolve_list, is_authoritative, verify_nameserver)
     verify_nameservers_proc.start()
+
     #test the empty string
     in_q.put((target, query_type, 0))
     spider_blacklist[target + query_type] = None
@@ -794,6 +799,8 @@ if __name__ == "__main__":
               help = "(optional) Number of lookup theads to run. default = 8")
     parser.add_option("-v", "--verbose", action = 'store_true', dest = "verbose", default = False,
               help = "(optional) Print debug information.")
+    parser.add_option("-V", "--do-not-verify-nameservers", action = 'store_true', dest = "not_verify_nameservers", default = False,
+              help = "(optional) Do not verify nameservers.")
     (options, args) = parser.parse_args()
 
     verbose = options.verbose
@@ -831,4 +838,4 @@ if __name__ == "__main__":
         if target:
             trace("dnslib:",dnslib.version)
             trace(target, record_type, options.subs, options.resolvers, options.process_count, options.print_data, output, json_output)
-            print_target(target, record_type, options.subs, options.resolvers, options.process_count, options.print_data, output, json_output)
+            print_target(target, record_type, options.subs, options.resolvers, options.process_count, options.print_data, output, json_output, not options.not_verify_nameservers)
